@@ -1,0 +1,13 @@
+{
+  "name": "rsr-upload-relay",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Relay that accepts a large contributor file upload from the browser and forwards it server-to-server to FileMaker Server's Data API, sidestepping FileMaker Server's own broken CORS handling for the Data API.",
+  "main": "server.js",
+  "engines": { "node": ">=18" },
+  "scripts": { "start": "node server.js" },
+  "dependencies": {
+    "busboy": "^1.6.0",
+    "form-data": "^4.0.0"
+  }
+}
