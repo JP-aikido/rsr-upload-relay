@@ -59,7 +59,9 @@ function fmContainerUpload({ host, database, layout, recordId, token }, fileStre
   form.append('upload', fileStream, { filename: filename || 'upload.bin' });
   const path = `/fmi/data/vLatest/databases/${encodeURIComponent(database)}/layouts/${encodeURIComponent(layout)}/records/${encodeURIComponent(recordId)}/containers/Upload/1`;
   const headers = Object.assign({ Authorization: 'Bearer ' + token }, form.getHeaders());
-  const req = https.request({ hostname: host, port: 443, path, method: 'PATCH', headers }, (res) => {
+  // The dedicated container-upload endpoint uses POST, not PATCH (confirmed
+  // via the endpoint's own "Allow: POST" response after PATCH returned 405).
+  const req = https.request({ hostname: host, port: 443, path, method: 'POST', headers }, (res) => {
     let data = '';
     res.on('data', (c) => (data += c));
     res.on('end', () => { let json = {}; try { json = JSON.parse(data); } catch (_) {} cb(null, { status: res.statusCode, json }); });
@@ -69,9 +71,12 @@ function fmContainerUpload({ host, database, layout, recordId, token }, fileStre
 }
 
 function fmScriptTrigger({ host, database, layout, recordId, token, scriptParam }, cb) {
-  const path = `/fmi/data/vLatest/databases/${encodeURIComponent(database)}/layouts/${encodeURIComponent(layout)}/records/${encodeURIComponent(recordId)}`
-    + `?script=${encodeURIComponent('Contributor Upload Intake (server)')}&script.param=${encodeURIComponent(scriptParam)}`;
-  const payload = JSON.stringify({ fieldData: {} });
+  const path = `/fmi/data/vLatest/databases/${encodeURIComponent(database)}/layouts/${encodeURIComponent(layout)}/records/${encodeURIComponent(recordId)}`;
+  // script/script.param as URL query params are silently ignored by this FM
+  // Server (confirmed: 200 OK with no scriptResult at all) — they must be
+  // top-level JSON body properties instead, matching the working pattern
+  // already proven in this project's /api/approve.js.
+  const payload = JSON.stringify({ fieldData: {}, script: 'Contributor Upload Intake (server)', 'script.param': scriptParam });
   const req = https.request({
     hostname: host, port: 443, path, method: 'PATCH',
     headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload), Authorization: 'Bearer ' + token },
