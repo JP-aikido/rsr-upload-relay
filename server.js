@@ -13,7 +13,7 @@
    This also sidesteps Vercel's ~4.5MB serverless request-body cap (files here
    are up to 300MB) — Render's free web-service tier has no such limit.
 
-   FLOW (confirmed working, after two earlier design mistakes ruled out):
+   FLOW (confirmed working, after three earlier design mistakes ruled out):
      1. Create the new (Pending Review) Ryushin_DB catalog record FIRST, via
         the "Contributor Upload Intake (server)" script — NO file yet. This
         used to try to "Export Field Contents" a copy of the file out to a
@@ -26,13 +26,17 @@
         "Technique URL" container field (POST, not PATCH — the dedicated
         container endpoint only accepts POST, confirmed via its own
         "Allow: POST" 405 response when PATCH was tried).
-     3. Read back that container's own FileMaker-Server-hosted streaming URL
-        (Data API serializes a populated container field's value as a plain
-        URL string) and write it into the record's own "URL" text field,
-        matching what the public search page reads.
-     Using a container field on the NEW record (rather than Contributor's
-     shared single Upload field) means each submission gets its own
-     permanent storage — nothing to clear/reuse between submissions.
+     That's it — this relay does NOT touch the "URL" text field at all.
+     FileMaker's own container-hosting URL (what you'd get by reading the
+     container field back) requires authentication to fetch (confirmed: 401
+     even with a valid bearer token), so it's useless for public embedding.
+     Instead, a genuine FileMaker Server SCHEDULE ("Export Pending Uploads
+     (scheduled)", configured in Admin Console, not triggered via the Data
+     API) periodically finds rows with a populated container but a still-
+     empty URL, exports each one to a real static file under httpsRoot, and
+     sets URL to that public path — a true Schedule may have fuller
+     server-side file access than a Data-API-triggered script does. This
+     relay leaving URL blank is exactly the signal that script polls for.
 
    POST /upload (multipart/form-data, FIELDS BEFORE THE FILE — the file
    handler buffers the file into memory and only starts step 1 once all
@@ -124,22 +128,6 @@ function uploadContainer({ host, database, recordId, token }, fileBuffer, filena
   form.pipe(req);
 }
 
-// Step 3: read back the container's own hosted URL, then write it into URL.
-function finalizeUrl({ host, database, recordId, token }, cb) {
-  const getPath = `/fmi/data/vLatest/databases/${encodeURIComponent(database)}/layouts/${encodeURIComponent(CATALOG_LAYOUT)}/records/${encodeURIComponent(recordId)}`;
-  fmRequest(host, 'GET', getPath, token, null, (err, getResult) => {
-    if (err) return cb(err);
-    if (getResult.status !== 200) return cb(null, { ok: false, error: 'Could not read back the uploaded file location.', detail: getResult.json });
-    const hostedUrl = getResult.json.response.data[0].fieldData['Technique URL'];
-    if (!hostedUrl) return cb(null, { ok: false, error: 'The uploaded file has no hosted URL yet.' });
-    fmRequest(host, 'PATCH', getPath, token, { fieldData: { URL: hostedUrl } }, (err2, patchResult) => {
-      if (err2) return cb(err2);
-      if (patchResult.status !== 200) return cb(null, { ok: false, error: 'Could not save the file location.', detail: patchResult.json });
-      cb(null, { ok: true, url: hostedUrl });
-    });
-  });
-}
-
 const server = http.createServer((req, res) => {
   setCors(req, res);
 
@@ -191,14 +179,11 @@ const server = http.createServer((req, res) => {
           if (err2) return fail(502, 'Uploading the file failed: ' + err2.message);
           if (uploadResult.status !== 200) return fail(502, 'FileMaker Server rejected the file upload.', uploadResult.json);
 
-          finalizeUrl({ host, database, recordId: createResult.recordId, token }, (err3, finalResult) => {
-            if (handled) return;
-            if (err3) return fail(502, 'Finalizing the submission failed: ' + err3.message);
-            if (!finalResult.ok) return fail(502, finalResult.error, finalResult.detail);
-            handled = true;
-            res.statusCode = 200;
-            res.end(JSON.stringify({ ok: true, url: finalResult.url }));
-          });
+          // Deliberately stops here — the scheduled FileMaker Server script
+          // picks up from the populated container + still-empty URL field.
+          handled = true;
+          res.statusCode = 200;
+          res.end(JSON.stringify({ ok: true }));
         });
       });
     });
